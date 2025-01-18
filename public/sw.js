@@ -1,10 +1,14 @@
 // Nombre de la caché
-const CACHE_NAME = 'offline-cache-v1';
+const CACHE_NAME = 'offline-cache-v2';
 
 // Recursos que queremos que estén disponibles offline
 const OFFLINE_URLS = [
   '/',
   '/manifest.json',
+  '/_next/static/css/app.css',
+  '/_next/static/chunks/main.js',
+  '/_next/static/chunks/pages/_app.js',
+  '/_next/static/chunks/pages/index.js',
   '/icons/android-chrome-192x192.png',
   '/icons/android-chrome-512x512.png',
   '/icons/apple-touch-icon.png',
@@ -18,67 +22,81 @@ const OFFLINE_URLS = [
   '/window.svg'
 ];
 
-// Instalar el Service Worker
+// Instalar el Service Worker y cachear todos los recursos
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('Opened cache');
+    Promise.all([
+      caches.open(CACHE_NAME).then((cache) => {
         return cache.addAll(OFFLINE_URLS);
-      })
-      .then(() => self.skipWaiting()) // Fuerza la activación inmediata
+      }),
+      self.skipWaiting() // Fuerza la activación inmediata
+    ])
   );
 });
 
-// Activar el Service Worker
+// Activar el Service Worker y limpiar cachés antiguas
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            return caches.delete(cacheName);
-          }
-        })
-      );
-    }).then(() => self.clients.claim()) // Toma el control inmediatamente
+    Promise.all([
+      caches.keys().then((cacheNames) => {
+        return Promise.all(
+          cacheNames.map((cacheName) => {
+            if (cacheName !== CACHE_NAME) {
+              return caches.delete(cacheName);
+            }
+          })
+        );
+      }),
+      self.clients.claim() // Toma el control inmediatamente
+    ])
   );
 });
 
-// Estrategia de caché: Network First, fallback to cache
+// Estrategia de caché: Cache First, fallback to network
 self.addEventListener('fetch', (event) => {
   event.respondWith(
-    fetch(event.request)
+    caches.match(event.request)
       .then((response) => {
-        // Si la respuesta es válida, la guardamos en caché
-        if (response && response.status === 200) {
-          const responseClone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseClone);
-          });
+        if (response) {
+          // Si encontramos el recurso en caché, lo devolvemos
+          return response;
         }
-        return response;
-      })
-      .catch(() => {
-        // Si falla la red, intentamos recuperar de la caché
-        return caches.match(event.request)
-          .then((response) => {
-            if (response) {
-              return response; // Retornamos el recurso de la caché
+
+        // Si no está en caché, intentamos obtenerlo de la red
+        return fetch(event.request)
+          .then((networkResponse) => {
+            // Verificamos si la respuesta es válida
+            if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
+              return networkResponse;
             }
-            // Si no está en caché y estamos offline, podríamos mostrar una página offline
+
+            // Clonamos la respuesta porque se consume al usarla
+            const responseToCache = networkResponse.clone();
+
+            // Guardamos la nueva respuesta en caché
+            caches.open(CACHE_NAME)
+              .then((cache) => {
+                cache.put(event.request, responseToCache);
+              });
+
+            return networkResponse;
+          })
+          .catch(() => {
+            // Si falla la red y no está en caché, devolvemos la página principal
             return caches.match('/');
           });
       })
   );
 });
 
-// Manejo de sincronización en segundo plano
+// Precachear recursos cuando hay conexión
 self.addEventListener('sync', (event) => {
-  if (event.tag === 'syncData') {
+  if (event.tag === 'precache') {
     event.waitUntil(
-      // Aquí puedes implementar la lógica de sincronización
-      Promise.resolve()
+      caches.open(CACHE_NAME)
+        .then((cache) => {
+          return cache.addAll(OFFLINE_URLS);
+        })
     );
   }
 });
