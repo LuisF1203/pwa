@@ -1,20 +1,14 @@
 // Nombre de la caché
-const CACHE_NAME = 'offline-cache-v2';
+const CACHE_NAME = 'offline-cache-v3';
+const OFFLINE_URL = '/offline';
 
 // Recursos que queremos que estén disponibles offline
 const OFFLINE_URLS = [
   '/',
+  '/offline',
   '/manifest.json',
-  '/_next/static/css/app.css',
-  '/_next/static/chunks/main.js',
-  '/_next/static/chunks/pages/_app.js',
-  '/_next/static/chunks/pages/index.js',
-  '/icons/android-chrome-192x192.png',
-  '/icons/android-chrome-512x512.png',
-  '/icons/apple-touch-icon.png',
-  '/icons/favicon-16x16.png',
-  '/icons/favicon-32x32.png',
-  '/icons/favicon.ico',
+  '/_next/static/**/*',
+  '/icons/*',
   '/next.svg',
   '/vercel.svg',
   '/file.svg',
@@ -26,10 +20,17 @@ const OFFLINE_URLS = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     Promise.all([
+      // Forzar la activación inmediata
+      self.skipWaiting(),
+      
+      // Cachear recursos críticos
       caches.open(CACHE_NAME).then((cache) => {
+        // Primero cachear la página offline
+        cache.add(new Request(OFFLINE_URL, { cache: 'reload' }));
+        
+        // Luego cachear el resto de recursos
         return cache.addAll(OFFLINE_URLS);
-      }),
-      self.skipWaiting() // Fuerza la activación inmediata
+      })
     ])
   );
 });
@@ -38,65 +39,75 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     Promise.all([
-      caches.keys().then((cacheNames) => {
-        return Promise.all(
-          cacheNames.map((cacheName) => {
-            if (cacheName !== CACHE_NAME) {
-              return caches.delete(cacheName);
+      // Limpiar cachés antiguas
+      caches.keys().then((keys) => 
+        Promise.all(
+          keys.map((key) => {
+            if (key !== CACHE_NAME) {
+              return caches.delete(key);
             }
           })
-        );
-      }),
-      self.clients.claim() // Toma el control inmediatamente
+        )
+      ),
+      // Tomar control inmediatamente
+      self.clients.claim()
     ])
   );
 });
 
 // Estrategia de caché: Cache First, fallback to network
 self.addEventListener('fetch', (event) => {
+  // Solo manejar peticiones GET
+  if (event.request.method !== 'GET') return;
+
   event.respondWith(
-    caches.match(event.request)
-      .then((response) => {
-        if (response) {
-          // Si encontramos el recurso en caché, lo devolvemos
-          return response;
+    (async () => {
+      try {
+        // Intentar obtener de la caché primero
+        const cachedResponse = await caches.match(event.request);
+        if (cachedResponse) {
+          return cachedResponse;
         }
 
-        // Si no está en caché, intentamos obtenerlo de la red
-        return fetch(event.request)
-          .then((networkResponse) => {
-            // Verificamos si la respuesta es válida
-            if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
-              return networkResponse;
-            }
+        // Si no está en caché, intentar la red
+        const networkResponse = await fetch(event.request);
+        
+        // Verificar que la respuesta es válida
+        if (networkResponse && networkResponse.status === 200) {
+          const cache = await caches.open(CACHE_NAME);
+          cache.put(event.request, networkResponse.clone());
+          return networkResponse;
+        }
 
-            // Clonamos la respuesta porque se consume al usarla
-            const responseToCache = networkResponse.clone();
-
-            // Guardamos la nueva respuesta en caché
-            caches.open(CACHE_NAME)
-              .then((cache) => {
-                cache.put(event.request, responseToCache);
-              });
-
-            return networkResponse;
-          })
-          .catch(() => {
-            // Si falla la red y no está en caché, devolvemos la página principal
-            return caches.match('/');
-          });
-      })
+        throw new Error('Invalid response');
+      } catch (error) {
+        // Si todo falla, mostrar la página offline
+        const cache = await caches.open(CACHE_NAME);
+        const cachedResponse = await cache.match(OFFLINE_URL);
+        return cachedResponse;
+      }
+    })()
   );
 });
 
-// Precachear recursos cuando hay conexión
+// Precachear cuando hay conexión
 self.addEventListener('sync', (event) => {
   if (event.tag === 'precache') {
     event.waitUntil(
-      caches.open(CACHE_NAME)
-        .then((cache) => {
-          return cache.addAll(OFFLINE_URLS);
-        })
+      caches.open(CACHE_NAME).then((cache) => 
+        cache.addAll(OFFLINE_URLS)
+      )
+    );
+  }
+});
+
+// Mantener la caché actualizada
+self.addEventListener('periodicsync', (event) => {
+  if (event.tag === 'update-cache') {
+    event.waitUntil(
+      caches.open(CACHE_NAME).then((cache) => 
+        cache.addAll(OFFLINE_URLS)
+      )
     );
   }
 });

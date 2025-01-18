@@ -3,11 +3,14 @@
   "short_name": "Next PWA",
   "description": "Una Progressive Web App creada con Next.js",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#000000",
   "orientation": "portrait",
-  "display_override": ["window-controls-overlay"],
+  "display_override": ["window-controls-overlay", "standalone"],
+  "prefer_related_applications": false,
+  "categories": ["utilities"],
   "icons": [
     {
       "src": "/icons/android-chrome-192x192.png",
